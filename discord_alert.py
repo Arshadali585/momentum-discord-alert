@@ -288,50 +288,36 @@ def send_discord(signal, price):
 # RUN
 # =====================================================
 
-print("Your Momentum Breakout Discord Alert is running...")
+print("Your Momentum Breakout Discord Alert started...")
 
-last_candle = None
+try:
 
-while True:
+    df = get_data()
 
-    try:
+    # Only CLOSED candle
+    candle_time = df["time"].iloc[-2]
 
-        df = get_data()
+    signal, price = check_signal(df)
 
-        # Only CLOSED candle
-        candle_time = df["time"].iloc[-2]
+    if signal:
 
-        if candle_time != last_candle:
+        print(f"{signal} SIGNAL | {price}")
 
-            last_candle = candle_time
+        send_discord(
+            signal,
+            price
+        )
 
-            signal, price = check_signal(df)
+    else:
 
-            if signal:
+        print(
+            "No signal |",
+            pd.to_datetime(
+                candle_time,
+                unit="ms"
+            )
+        )
 
-                print(
-                    f"{signal} SIGNAL | {price}"
-                )
+except Exception as e:
 
-                send_discord(
-                    signal,
-                    price
-                )
-
-            else:
-
-                print(
-                    "No signal |",
-                    pd.to_datetime(
-                        candle_time,
-                        unit="ms"
-                    )
-                )
-
-        time.sleep(30)
-
-    except Exception as e:
-
-        print("Error:", e)
-
-        time.sleep(30)
+    print("Error:", e)
