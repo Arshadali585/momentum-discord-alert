@@ -1,4 +1,5 @@
 import requests
+import os
 import pandas as pd
 import time
 
@@ -9,7 +10,7 @@ import time
 SYMBOL = "BTCUSDT"
 INTERVAL = "1h"
 
-WEBHOOK_URL = ""
+WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK", "")
 
 emaFastLen = 9
 emaSlowLen = 21
