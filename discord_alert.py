@@ -4,11 +4,11 @@ import pandas as pd
 import time
 
 # =====================================================
-# SAME SETTINGS AS YOUR TRADINGVIEW INDICATOR
+# SETTINGS
 # =====================================================
 
-SYMBOL = "BTCUSDT"
 INTERVAL = "1h"
+TOP_N = 10          # top gainers count
 
 WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK", "")
 
@@ -28,20 +28,41 @@ volMult = 1.2
 useConfirm = False
 cooldown = 3
 
-atrLen = 14
-slMult = 1.5
-rr = 2.0
-
 # =====================================================
-# BINANCE FUTURES DATA
+# GET TOP GAINERS FROM BINANCE FUTURES
 # =====================================================
 
-def get_data():
+def get_top_gainers():
+
+    url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+    r = requests.get(url, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+
+    df = pd.DataFrame(data)
+
+    df["priceChangePercent"] = df["priceChangePercent"].astype(float)
+
+    # Only USDT perpetuals
+    df = df[df["symbol"].str.endswith("USDT")]
+
+    top = df.sort_values(
+        "priceChangePercent", ascending=False
+    ).head(TOP_N)
+
+    return top["symbol"].tolist()
+
+
+# =====================================================
+# BINANCE FUTURES CANDLE DATA
+# =====================================================
+
+def get_data(symbol):
 
     url = "https://fapi.binance.com/fapi/v1/klines"
 
     params = {
-        "symbol": SYMBOL,
+        "symbol": symbol,
         "interval": INTERVAL,
         "limit": 100
     }
@@ -64,12 +85,11 @@ def get_data():
 
 
 # =====================================================
-# CHECK SIGNAL — SAME LOGIC
+# CHECK SIGNAL — SAME LOGIC AS BEFORE
 # =====================================================
 
 def check_signal(df):
 
-    # Last CLOSED candle
     i = len(df) - 2
 
     open_ = df["open"].iloc[i]
@@ -78,184 +98,45 @@ def check_signal(df):
     close = df["close"].iloc[i]
     volume = df["volume"].iloc[i]
 
-    # Body
     body = abs(close - open_)
-
-    # Same as ta.sma(body, 20)[1]
     bodies = abs(df["close"] - df["open"])
-
     avgBody = bodies.iloc[:i].tail(bodyAvgLen).mean()
 
-    # Range
     rng = high - low
+    closePos = (close - low) / rng * 100 if rng > 0 else 50
 
-    closePos = (
-        (close - low) / rng * 100
-        if rng > 0 else 50
-    )
+    emaFast = df["close"].ewm(span=emaFastLen, adjust=False).mean().iloc[i]
+    emaSlow = df["close"].ewm(span=emaSlowLen, adjust=False).mean().iloc[i]
 
-    # EMA
-    emaFast = (
-        df["close"]
-        .ewm(span=emaFastLen, adjust=False)
-        .mean()
-        .iloc[i]
-    )
+    distUp = (close - emaFast) / emaFast * 100
+    distDn = (emaFast - close) / emaFast * 100
 
-    emaSlow = (
-        df["close"]
-        .ewm(span=emaSlowLen, adjust=False)
-        .mean()
-        .iloc[i]
-    )
+    volAvg = df["volume"].iloc[:i].tail(volLen).mean()
+    volOk = (not useVol or pd.isna(volAvg) or volume > volAvg * volMult)
 
-    # Distance
-    distUp = (
-        (close - emaFast) / emaFast * 100
-    )
-
-    distDn = (
-        (emaFast - close) / emaFast * 100
-    )
-
-    # Volume average — previous candles only
-    volAvg = (
-        df["volume"]
-        .iloc[:i]
-        .tail(volLen)
-        .mean()
-    )
-
-    volOk = (
-        not useVol
-        or pd.isna(volAvg)
-        or volume > volAvg * volMult
-    )
-
-    # Big body
     bigBody = body > avgBody * bodyMult
 
-    # EXACT rawLong
     rawLong = (
-        close > open_
-        and bigBody
+        close > open_ and bigBody
         and distUp >= distPct
         and closePos >= closePosPct
         and volOk
     )
 
-    # EXACT rawShort
     rawShort = (
-        close < open_
-        and bigBody
+        close < open_ and bigBody
         and distDn >= distPct
         and closePos <= (100 - closePosPct)
         and volOk
     )
 
-    # Confirmation
-    if useConfirm:
-
-        previous = i - 1
-
-        prev_open = df["open"].iloc[previous]
-        prev_close = df["close"].iloc[previous]
-
-        prev_high = df["high"].iloc[previous]
-        prev_low = df["low"].iloc[previous]
-
-        prev_rng = prev_high - prev_low
-
-        prev_closePos = (
-            (prev_close - prev_low) /
-            prev_rng * 100
-            if prev_rng > 0 else 50
-        )
-
-        prev_body = abs(
-            prev_close - prev_open
-        )
-
-        prev_avgBody = (
-            bodies.iloc[:previous]
-            .tail(bodyAvgLen)
-            .mean()
-        )
-
-        prev_emaFast = (
-            df["close"]
-            .ewm(span=emaFastLen, adjust=False)
-            .mean()
-            .iloc[previous]
-        )
-
-        prev_distUp = (
-            (prev_close - prev_emaFast) /
-            prev_emaFast * 100
-        )
-
-        prev_distDn = (
-            (prev_emaFast - prev_close) /
-            prev_emaFast * 100
-        )
-
-        prev_volAvg = (
-            df["volume"]
-            .iloc[:previous]
-            .tail(volLen)
-            .mean()
-        )
-
-        prev_volOk = (
-            not useVol
-            or pd.isna(prev_volAvg)
-            or df["volume"].iloc[previous]
-            > prev_volAvg * volMult
-        )
-
-        prev_bigBody = (
-            prev_body >
-            prev_avgBody * bodyMult
-        )
-
-        prev_rawLong = (
-            prev_close > prev_open
-            and prev_bigBody
-            and prev_distUp >= distPct
-            and prev_closePos >= closePosPct
-            and prev_volOk
-        )
-
-        prev_rawShort = (
-            prev_close < prev_open
-            and prev_bigBody
-            and prev_distDn >= distPct
-            and prev_closePos <= (100 - closePosPct)
-            and prev_volOk
-        )
-
-        longCond = (
-            prev_rawLong
-            and close > prev_close
-            and close > open_
-        )
-
-        shortCond = (
-            prev_rawShort
-            and close < prev_close
-            and close < open_
-        )
-
-    else:
-        longCond = rawLong
-        shortCond = rawShort
+    longCond = rawLong
+    shortCond = rawShort
 
     if longCond:
         return "LONG", close
-
     if shortCond:
         return "SHORT", close
-
     return None, close
 
 
@@ -263,61 +144,9 @@ def check_signal(df):
 # DISCORD
 # =====================================================
 
-def send_discord(signal, price):
+def send_discord(symbol, signal, price):
 
     if signal == "LONG":
         title = "🚀 MOMENTUM LONG"
     else:
         title = "🔻 MOMENTUM SHORT"
-
-    message = (
-        f"**{title}**\n"
-        f"Symbol: **{SYMBOL} Futures**\n"
-        f"Timeframe: **1H**\n"
-        f"Price: **{price}**"
-    )
-
-    requests.post(
-        WEBHOOK_URL,
-        json={"content": message},
-        timeout=30
-    )
-
-
-# =====================================================
-# RUN
-# =====================================================
-
-print("Your Momentum Breakout Discord Alert started...")
-
-try:
-
-    df = get_data()
-
-    # Only CLOSED candle
-    candle_time = df["time"].iloc[-2]
-
-    signal, price = check_signal(df)
-
-    if signal:
-
-        print(f"{signal} SIGNAL | {price}")
-
-        send_discord(
-            signal,
-            price
-        )
-
-    else:
-
-        print(
-            "No signal |",
-            pd.to_datetime(
-                candle_time,
-                unit="ms"
-            )
-        )
-
-except Exception as e:
-
-    print("Error:", e)
